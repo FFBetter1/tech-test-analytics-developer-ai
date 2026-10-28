@@ -1,0 +1,159 @@
+-- MEASURES.dax
+-- Twin Hearth Studios Analytics Assessment
+-- We've used the relationships we built in the semantic model MODEL.md
+-- All revenue amounts are already net of platform fees, so we don't need to substract fees or smt
+
+-- ============================================================
+-- 1. Base revenue measures
+-- ============================================================
+
+-- Sum of order net revenue.
+[Order Net Revenue] =
+SUM ( fact_order[net_usd] )
+
+-- Sum of net refunds, for the original order date.
+[Net Refunds - Order Date] =
+SUM ( fact_refund[net_refund_usd] )
+
+-- Net revenue recognized on the original order date.
+[Net Revenue] =
+[Order Net Revenue] - [Net Refunds - Order Date]
+
+-- ============================================================
+-- 2. Cash and Treasury measures
+-- ============================================================
+
+-- Cash received based on order settlement date, not order date. 
+-- This changes the original order-date relationship for this calculation and uses the settlement date instead
+[Cash Settled] =
+CALCULATE (
+    [Order Net Revenue],
+    CROSSFILTER (
+        dim_date[date],
+        fact_order[order_date],
+        NONE
+    ),
+    USERELATIONSHIP (
+        dim_date[date],
+        fact_order[settlement_date]
+    )
+)
+-- Net refunds paid based on the date the refund occurred.
+-- This makes the refund measure use the date the refund occurred, which is the date Treasury needs.
+[Refund Cash Outflow] =
+
+[Refund Cash Outflow] =
+CALCULATE (
+    SUM ( fact_refund[net_refund_usd] ),
+    CROSSFILTER (
+        dim_date[date],
+        fact_refund[order_date],
+        NONE
+    ),
+    USERELATIONSHIP (
+        dim_date[date],
+        fact_refund[refund_date]
+    )
+)
+-- ============================================================
+-- 3. Paying players and player value
+-- ============================================================
+
+-- Count distinct players with positive net revenue after refunds.
+[Paying Players] =
+COUNTROWS (
+    FILTER (
+        VALUES ( dim_player[player_id] ),
+        CALCULATE ( [Net Revenue] ) > 0
+    )
+)
+
+-- Average net revenue per paying player.
+[Net Revenue per Paying Player] =
+DIVIDE ( [Net Revenue], [Paying Players] )
+
+-- ============================================================
+-- 4. Fiscal-year and quarter measures
+-- ============================================================
+
+-- Net revenue for FY2026.
+[Net Revenue FY2026] =
+CALCULATE (
+    [Net Revenue],
+    REMOVEFILTERS ( dim_date ),
+    dim_date[fiscal_year] = "FY2026"
+)
+
+-- Net revenue for FY2026 Q2.
+[Net Revenue FY2026 Q2] =
+CALCULATE (
+    [Net Revenue],
+    REMOVEFILTERS ( dim_date ),
+    dim_date[fiscal_year] = "FY2026",
+    dim_date[fiscal_quarter_no] = 2
+)
+
+-- Net revenue for the equivalent quarter of the prior fiscal year.
+[Net Revenue FY2025 Q2] =
+CALCULATE (
+    [Net Revenue],
+    REMOVEFILTERS ( dim_date ),
+    dim_date[fiscal_year] = "FY2025",
+    dim_date[fiscal_quarter_no] = 2
+)
+
+-- Year-over-year growth percentage for FY2026 Q2.
+[Net Revenue YoY Growth %] =
+DIVIDE (
+    [Net Revenue FY2026 Q2] - [Net Revenue FY2025 Q2],
+    [Net Revenue FY2025 Q2]
+)
+
+-- ============================================================
+-- 5. Studio attribution
+-- ============================================================
+
+-- Net revenue for the selected studio or studios.
+-- TREATAS transfers credited title IDs to the title dimension.
+[Studio Attributed Net Revenue] =
+VAR CreditedTitles =
+    CALCULATETABLE (
+        VALUES ( bridge_title_studio[title_id] )
+    )
+RETURN
+    CALCULATE (
+        [Net Revenue],
+        REMOVEFILTERS ( dim_title ),
+        TREATAS ( CreditedTitles, dim_title[title_id] )
+    )
+
+-- Company net revenue; studio attribution is intentionally ignored.
+[Company Net Revenue] =
+CALCULATE (
+    [Net Revenue],
+    REMOVEFILTERS ( dim_studio ),
+    REMOVEFILTERS ( bridge_title_studio ),
+    REMOVEFILTERS ( dim_title )
+)
+
+-- Each title's share of the selected studio's total revenue.
+[Title Share of Studio %] =
+DIVIDE (
+    [Studio Attributed Net Revenue],
+    CALCULATE (
+        [Studio Attributed Net Revenue],
+        REMOVEFILTERS ( dim_title )
+    )
+)
+
+-- ============================================================
+-- 6. Presentation measures
+-- ============================================================
+
+-- Display net revenue to two decimal places in report visuals.
+[Net Revenue Display] =
+ROUND ( [Net Revenue], 2 )
+
+-- Display studio-attributed revenue to two decimal places.
+[Studio Revenue Display] =
+ROUND ( [Studio Attributed Net Revenue], 2 )
